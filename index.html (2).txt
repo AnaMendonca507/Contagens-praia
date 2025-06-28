@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Contagem de Praia com Temporizador e Weather</title>
+  <style>
+    #status { margin-top: 1em; font-weight: bold; }
+    #status.success { color: green; }
+    #status.error   { color: red; }
+    #timer          { font-weight: bold; font-size: 1.5em; margin-top: 0.5em; }
+    #pendingCount   { margin-bottom: 1em; color: orange; }
+  </style>
+</head>
+<body>
+  <h1>Enviar dados de contagem de praia</h1>
+  <div id="pendingCount"></div>
+
+  <form id="contagemForm">
+    <label>Praia:
+      <select id="beach" required>
+        <option value="">-- Escolhe uma praia --</option>
+        <option value="Praia do Morro">Praia do Morro</option>
+        <option value="Praia dos Pelames">Praia dos Pelames</option>
+        <option value="Praia do Fogo">Praia do Fogo</option>
+        <option value="Praia da Vinha d'Areia">Praia da Vinha d'Areia</option>
+        <option value="Praia de Água d'Alto">Praia de Água d'Alto</option>
+      </select>
+    </label><br/><br/>
+
+    <button type="button" id="startBtn">Iniciar Contagem</button><br/><br/>
+
+    <div id="timer">Tempo: 0 m 0 s</div><br/>
+
+    <label>Número de Pessoas:
+      <input type="number" id="count" min="0" required disabled />
+    </label><br/><br/>
+
+    <label>Condições do Tempo:
+      <input type="text" id="weather" readonly />
+    </label><br/><br/>
+
+    <button type="submit" id="sendBtn" disabled>Enviar</button>
+  </form>
+
+  <div id="status"></div>
+
+  <script>
+    const URL    = "https://script.google.com/macros/s/AKfycbzK5rje0r2xehFtbt-m1oIGJ4czZbqBQzGwtOYzkCNtxmCesJxpLWhR6Jy0vICG7IiFPA/exec";
+    const APIKEY = "3914227459f9868933f141c860ba9219";
+    const LAT = 37.7412, LON = -25.6756;
+
+    const form       = document.getElementById("contagemForm");
+    const beach      = document.getElementById("beach");
+    const startBtn   = document.getElementById("startBtn");
+    const sendBtn    = document.getElementById("sendBtn");
+    const countInput = document.getElementById("count");
+    const weatherIn  = document.getElementById("weather");
+    const timerDiv   = document.getElementById("timer");
+    const statusDiv  = document.getElementById("status");
+    const pendCount  = document.getElementById("pendingCount");
+
+    const PKEY = "contagensPendentes";
+    let startTime, timerInterval, weatherInterval, durationText = "0m 0s";
+
+    function showStatus(msg, ok) {
+      statusDiv.textContent = msg;
+      statusDiv.className = ok ? "success" : "error";
+    }
+
+    function updateTimer() {
+      const elapsed = Date.now() - startTime;
+      const mins = Math.floor(elapsed / 60000);
+      const secs = Math.floor((elapsed % 60000) / 1000);
+      durationText = `${mins}m ${secs}s`;
+      timerDiv.textContent = `Tempo: ${durationText}`;
+    }
+
+    async function fetchWeather() {
+      try {
+        const res = await fetch(
+          `https://api.openweathermap.org/data/2.5/weather?lat=${LAT}&lon=${LON}&units=metric&lang=pt&appid=${APIKEY}`
+        );
+        const d = await res.json();
+        weatherIn.value = `${d.weather[0].description}, ${d.main.temp.toFixed(1)}°C`;
+      } catch {
+        weatherIn.value = "Não foi possível obter o tempo";
+      }
+    }
+
+    async function postData(payload) {
+      await fetch(URL, {
+        method: "POST",
+        mode: "no-cors",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+    }
+
+    function updatePendCount() {
+      const pend = JSON.parse(localStorage.getItem(PKEY)) || [];
+      pendCount.textContent = pend.length
+        ? `📥 Tens ${pend.length} dados pendentes para enviar`
+        : '';
+    }
+
+    function savePending(data) {
+      const pend = JSON.parse(localStorage.getItem(PKEY)) || [];
+      pend.push(data);
+      localStorage.setItem(PKEY, JSON.stringify(pend));
+      updatePendCount();
+    }
+
+    async function sendPendings() {
+      const pend = JSON.parse(localStorage.getItem(PKEY)) || [];
+      for (let i = 0; i < pend.length; i++) {
+        try {
+          await postData(pend[i]);
+          pend.splice(i, 1);
+          i--;
+        } catch {
+          break;
+        }
+      }
+      localStorage.setItem(PKEY, JSON.stringify(pend));
+      updatePendCount();
+    }
+
+    startBtn.addEventListener("click", () => {
+      if (!beach.value) return alert("Escolhe uma praia.");
+      startTime = Date.now();
+      durationText = "0m 0s";
+      timerDiv.textContent = "Tempo: 0m 0s";
+      showStatus("Contagem iniciada...", true);
+
+      beach.disabled    = true;
+      startBtn.disabled = true;
+      countInput.disabled = false;
+      sendBtn.disabled  = false;
+
+      updateTimer();
+      timerInterval   = setInterval(updateTimer, 1000);
+      fetchWeather();
+      weatherInterval = setInterval(fetchWeather, 300000);
+    });
+
+    form.addEventListener("submit", async e => {
+      e.preventDefault();
+      clearInterval(timerInterval);
+      clearInterval(weatherInterval);
+
+      if (countInput.value === "" || countInput.value < 0) {
+        return alert("Insere um número válido de pessoas.");
+      }
+
+      const payload = {
+        dateTime: new Date().toISOString(),
+        beach:    beach.value,
+        count:    parseInt(countInput.value, 10),
+        weather:  weatherIn.value,
+        duration: durationText
+      };
+
+      try {
+        await postData(payload);
+        showStatus("Dados enviados (sem confirmação)", true);
+      } catch {
+        showStatus("Erro ao enviar. Dados guardados localmente.", false);
+        savePending(payload);
+      }
+
+      // reset
+      clearInterval(timerInterval);
+      clearInterval(weatherInterval);
+      form.reset();
+      beach.disabled    = false;
+      startBtn.disabled = false;
+      countInput.disabled = true;
+      sendBtn.disabled  = true;
+      timerDiv.textContent = "Tempo: 0m 0s";
+      weatherIn.value   = "";
+      durationText      = "0m 0s";
+    });
+
+    window.addEventListener("online", () => sendPendings());
+    window.addEventListener("load", () => {
+      countInput.disabled = true;
+      sendBtn.disabled    = true;
+      updatePendCount();
+      sendPendings();
+    });
+  </script>
+</body>
+</html>
+
